@@ -11,7 +11,11 @@ import {
   PointSymbolizer,
   IconSymbolizer,
   Filter,
-  Operator
+  Operator,
+  isFillSymbolizer,
+  isLineSymbolizer,
+  isIconSymbolizer,
+  isMarkSymbolizer
 } from 'geostyler-style';
 
 import OlStyle from 'ol/style/Style';
@@ -22,10 +26,19 @@ import OlStyleText from 'ol/style/Text';
 import OlStyleCircle from 'ol/style/Circle';
 import OlStyleIcon from 'ol/style/Icon';
 import OlStyleRegularshape from 'ol/style/RegularShape';
+import { DEVICE_PIXEL_RATIO } from 'ol/has';
 
 import OlStyleUtil from './Util/OlStyleUtil';
+import CanvasUtil from './Util/CanvasUtil';
 import MapUtil from '@terrestris/ol-util/dist/MapUtil/MapUtil';
 import _get from 'lodash/get';
+
+// we have to use the global window variable for
+// the handling of graphicFills. All contents
+// will be stored under gsOlImg.
+declare const window: Window & typeof globalThis & {
+  gsOlImg: any;
+};
 
 export interface OlParserStyleFct {
   (feature: any, resolution: number): any;
@@ -485,7 +498,8 @@ export class OlStyleParser implements StyleParser {
       const hasDynamicIconSymbolizer = rules[0].symbolizers.some((symbolizer: Symbolizer) => {
         return symbolizer.kind === 'Icon' && symbolizer.image?.includes('{{');
       });
-      if (!hasFilter && !hasScaleDenominator && !hasTextSymbolizer && !hasDynamicIconSymbolizer) {
+      const hasGraphicFill = this.hasGraphicFill(rules[0].symbolizers);
+      if (!hasFilter && !hasScaleDenominator && !hasTextSymbolizer && !hasDynamicIconSymbolizer && !hasGraphicFill) {
         if (nrSymbolizers === 1) {
           return this.geoStylerStyleToOlStyle(geoStylerStyle);
         } else {
@@ -508,7 +522,7 @@ export class OlStyleParser implements StyleParser {
   geoStylerStyleToOlStyle(geoStylerStyle: Style): any {
     const rule = geoStylerStyle.rules[0];
     const symbolizer = rule.symbolizers[0];
-    const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symbolizer);
+    const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symbolizer, undefined);
     return olSymbolizer;
   }
 
@@ -522,7 +536,7 @@ export class OlStyleParser implements StyleParser {
     const rule = geoStylerStyle.rules[0];
     const olStyles: any[] = [];
     rule.symbolizers.forEach((symbolizer: Symbolizer) => {
-      const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symbolizer);
+      const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symbolizer, undefined);
       olStyles.push(olSymbolizer);
     });
     return olStyles;
@@ -567,7 +581,7 @@ export class OlStyleParser implements StyleParser {
 
         if (isWithinScale && matchesFilter) {
           rule.symbolizers.forEach((symb: Symbolizer) => {
-            const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symb);
+            const olSymbolizer: any = this.getOlSymbolizerFromSymbolizer(symb, feature);
 
             // this.getOlTextSymbolizerFromTextSymbolizer returns
             // either an OlStyle or an ol.StyleFunction. OpenLayers only accepts an array
@@ -687,7 +701,7 @@ export class OlStyleParser implements StyleParser {
    * @param {Symbolizer} symbolizer A GeoStyler-Style Symbolizer.
    * @return {object} The OpenLayers Style object or a StyleFunction
    */
-  getOlSymbolizerFromSymbolizer(symbolizer: Symbolizer): any {
+  getOlSymbolizerFromSymbolizer(symbolizer: Symbolizer, feature: any): any {
     let olSymbolizer: any;
     switch (symbolizer.kind) {
       case 'Mark':
@@ -703,7 +717,7 @@ export class OlStyleParser implements StyleParser {
         olSymbolizer = this.getOlLineSymbolizerFromLineSymbolizer(symbolizer);
         break;
       case 'Fill':
-        olSymbolizer = this.getOlPolygonSymbolizerFromFillSymbolizer(symbolizer);
+        olSymbolizer = this.getOlPolygonSymbolizerFromFillSymbolizer(symbolizer, feature);
         break;
       default:
         // Return the OL default style since the TS type binding does not allow
@@ -994,8 +1008,8 @@ export class OlStyleParser implements StyleParser {
    * @param {FillSymbolizer} fillSymbolizer A GeoStyler-Style FillSymbolizer.
    * @return {object} The OL Style object
    */
-  getOlPolygonSymbolizerFromFillSymbolizer(symbolizer: FillSymbolizer) {
-    const fill = symbolizer.color ? new this.OlStyleFillConstructor({
+  getOlPolygonSymbolizerFromFillSymbolizer(symbolizer: FillSymbolizer, feature: any) {
+    let fill = symbolizer.color ? new this.OlStyleFillConstructor({
       color: (symbolizer.opacity !== null && symbolizer.opacity !== undefined) ?
         OlStyleUtil.getRgbaColor(symbolizer.color, symbolizer.opacity) : symbolizer.color
     }) : null;
@@ -1007,10 +1021,84 @@ export class OlStyleParser implements StyleParser {
       lineDash: symbolizer.outlineDasharray,
     }) : null;
 
+    if (symbolizer.graphicFill) {
+      const pattern = this.getOlPatternFromGraphicFill(symbolizer.graphicFill, feature);
+      if (!fill) {
+        fill = new this.OlStyleFillConstructor({});
+      }
+      fill.setColor(pattern);
+    }
+
     return new this.OlStyleConstructor({
       stroke: stroke,
       fill: fill
     });
+  }
+
+  /**
+   * Create a canvas pattern for rendering graphicFill.
+   */
+  getOlPatternFromGraphicFill(graphicFill: PointSymbolizer, feature: any): CanvasPattern | undefined {
+    if (isIconSymbolizer(graphicFill)) {
+      return this.getOlPatternFromIconSymbolizer(graphicFill, feature);
+    } else if (isMarkSymbolizer(graphicFill)) {
+      return this.getOlPatternFromMarkSymbolizer(graphicFill, feature);
+    } else {
+      return this.getOlPatternFromTextSymbolizer(graphicFill, feature);
+    }
+  }
+
+  /**
+   * Create a canvas pattern from an image symbolizer.
+   */
+  getOlPatternFromIconSymbolizer(symbolizer: IconSymbolizer, feature: any): CanvasPattern | undefined {
+    const pixelRatio = DEVICE_PIXEL_RATIO;
+    const c = document.createElement('canvas');
+    c.height = (symbolizer.size || 1) * pixelRatio;
+    c.width = (symbolizer.size || 1) * pixelRatio;
+
+    const ctx = c.getContext('2d');
+    if (ctx === null) {
+      return;
+    }
+
+    if (!window.gsOlImg) {
+      window.gsOlImg = {};
+    }
+
+    const url = symbolizer.image;
+    if (url !== undefined && url !== null && url.length > 0) {
+      if (!window.gsOlImg[url]) {
+        window.gsOlImg[url] = new Image();
+        window.gsOlImg[url].src = url;
+        window.gsOlImg[url].crossOrigin = 'Anonymous';
+        window.gsOlImg[url].onload = () => {
+          if (feature) {
+            feature.changed();
+          }
+        };
+      }
+      const img = window.gsOlImg[url];
+      if (symbolizer.opacity !== undefined && symbolizer.opacity !== null) {
+        ctx.globalAlpha = symbolizer.opacity;
+      }
+      if (symbolizer.rotate !== undefined && symbolizer.rotate !== null) {
+        CanvasUtil.rotateContext(c, symbolizer.rotate);
+      }
+      ctx.drawImage(img, 0, 0, symbolizer.size || 1, symbolizer.size || 1);
+    }
+
+    return ctx.createPattern(c, 'repeat') as CanvasPattern;
+  }
+
+  getOlPatternFromTextSymbolizer(symbolizer: TextSymbolizer, feature: any): CanvasPattern | undefined {
+    // TODO
+    return;
+  }
+
+  getOlPatternFromMarkSymbolizer(symbolizer: MarkSymbolizer, feature: any): CanvasPattern | undefined {
+    // TODO
+    return;
   }
 
   /**
@@ -1071,6 +1159,22 @@ export class OlStyleParser implements StyleParser {
         })
       });
     }
+  }
+
+  /**
+   * Check if list of symbolizers contains a symbolizer with
+   * graphicFill property.
+   *
+   * @param symbolizers List of Symbolizers to check.
+   * @returns True, if at least one symbolizer has graphicFill. False otherwise.
+   */
+  hasGraphicFill (symbolizers: Symbolizer[]): boolean {
+    return symbolizers.some((symbolizer: Symbolizer) => {
+      if (!isFillSymbolizer(symbolizer) && !isLineSymbolizer(symbolizer)) {
+        return false;
+      }
+      return !!symbolizer.graphicFill;
+    });
   }
 
 }
