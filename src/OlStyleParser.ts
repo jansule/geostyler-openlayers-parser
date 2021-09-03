@@ -1037,9 +1037,8 @@ export class OlStyleParser implements StyleParser {
       return this.getOlPatternFromIconSymbolizer(graphicFill, feature);
     } else if (isMarkSymbolizer(graphicFill)) {
       return this.getOlPatternFromMarkSymbolizer(graphicFill, feature);
-    } else {
-      return this.getOlPatternFromTextSymbolizer(graphicFill, feature);
     }
+    return;
   }
 
   /**
@@ -1079,11 +1078,6 @@ export class OlStyleParser implements StyleParser {
     }
 
     return ctx.createPattern(c, 'repeat') as CanvasPattern;
-  }
-
-  getOlPatternFromTextSymbolizer(symbolizer: TextSymbolizer, feature: any): CanvasPattern | undefined {
-    // TODO
-    return;
   }
 
   getOlPatternFromMarkSymbolizer(symbolizer: MarkSymbolizer, feature: any): CanvasPattern | undefined {
