@@ -3,7 +3,7 @@ class CanvasUtil {
   /**
    * Rotate the canvas around its own center in degrees.
    */
-  public static rotateContext(canvas: HTMLCanvasElement, rotation: number) {
+  public static rotate(canvas: HTMLCanvasElement, rotation: number) {
     // getContext always returns the same context instance
     const context = canvas.getContext('2d');
     if (context === null) {

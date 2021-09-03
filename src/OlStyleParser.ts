@@ -33,13 +33,6 @@ import CanvasUtil from './Util/CanvasUtil';
 import MapUtil from '@terrestris/ol-util/dist/MapUtil/MapUtil';
 import _get from 'lodash/get';
 
-// we have to use the global window variable for
-// the handling of graphicFills. All contents
-// will be stored under gsOlImg.
-declare const window: Window & typeof globalThis & {
-  gsOlImg: any;
-};
-
 export interface OlParserStyleFct {
   (feature: any, resolution: number): any;
   __geoStylerStyle: Style;
@@ -61,6 +54,7 @@ export class OlStyleParser implements StyleParser {
 
   title = 'OpenLayers Style Parser';
   olIconStyleCache: any = {};
+  olImageCache: any = {};
 
   OlStyleConstructor: any = OlStyle;
   OlStyleImageConstructor: any = OlStyleImage;
@@ -1062,28 +1056,24 @@ export class OlStyleParser implements StyleParser {
       return;
     }
 
-    if (!window.gsOlImg) {
-      window.gsOlImg = {};
-    }
-
     const url = symbolizer.image;
     if (url !== undefined && url !== null && url.length > 0) {
-      if (!window.gsOlImg[url]) {
-        window.gsOlImg[url] = new Image();
-        window.gsOlImg[url].src = url;
-        window.gsOlImg[url].crossOrigin = 'Anonymous';
-        window.gsOlImg[url].onload = () => {
+      if (!this.olImageCache[url]) {
+        this.olImageCache[url] = new Image();
+        this.olImageCache[url].src = url;
+        this.olImageCache[url].crossOrigin = 'Anonymous';
+        this.olImageCache[url].onload = () => {
           if (feature) {
             feature.changed();
           }
         };
       }
-      const img = window.gsOlImg[url];
+      const img = this.olImageCache[url];
       if (symbolizer.opacity !== undefined && symbolizer.opacity !== null) {
         ctx.globalAlpha = symbolizer.opacity;
       }
       if (symbolizer.rotate !== undefined && symbolizer.rotate !== null) {
-        CanvasUtil.rotateContext(c, symbolizer.rotate);
+        CanvasUtil.rotate(c, symbolizer.rotate);
       }
       ctx.drawImage(img, 0, 0, symbolizer.size || 1, symbolizer.size || 1);
     }
